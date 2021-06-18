@@ -1,74 +1,51 @@
-import {RequestHandler} from "express";
-import Joi from "joi";
-import {createUser, getUser, User} from "../db/users";
-import {createJWT} from "../middleware/jwtToken";
-import {constructErrorJSON} from "../utils/getErrorMessage";
-import {comparePassword, hashPassword} from "../utils/passwordUtils";
+import { RequestHandler } from "express";
+import { User } from "../db/users";
+import { createJWT } from "../middleware/jwtToken";
+import { comparePassword, hashPassword } from "../utils/passwordUtils";
+import getUser from "../db/users";
 
-const loginSchema = Joi.object({
-  username: Joi.string().alphanum().min(3).max(30).required(),
-  password: Joi.string().min(8).max(512).required(),
-})
+export const loginController: RequestHandler = async (req, res) => {
+  const { username, password } = req.body;
 
-const registerSchema = Joi.object({
-  username: Joi.string().alphanum().min(3).max(30).required(),
-  password: Joi.string().min(8).max(512).required(),
-  role: Joi.string().valid('STUDENT', 'TEACHER').required()
-})
-
-export const loginController: RequestHandler = async (req, res, next) => {
-
-  console.log(req.body);
-
-  const {value, error} = loginSchema.validate(req.body);
-
-  if (error) {
-    const errorPayload = constructErrorJSON(error);
-    return res.status(400).statusson(errorPayload)
-
-  }
-
-  const user = await getUser(value.username);
+  const user = (await getUser().where("username", "=", username))[0];
   if (!user) {
-    return res.status(400).json({error: "Invalid Username or Password"})
+    return res.status(400).json({ error: "Invalid Username or Password" });
   }
 
-  const valid = await comparePassword(user.password, value.password);
+  const valid = await comparePassword(user.password, password);
 
+  const { password: pwd, ...responseUser } = user;
   if (valid) {
-
     const jwt = await createJWT(user);
-    return res.json({message: "", access_token: jwt})
-
+    return res.json({ message: "", access_token: jwt, user: responseUser });
   } else {
-    res.status(400).json({error: "Invalid Username or Password"})
+    res.status(400).json({ error: "Invalid Username or Password" });
   }
+};
 
-}
+export const registerController: RequestHandler = async (req, res) => {
+  const { username, password, role } = req.body;
 
-
-export const registerController: RequestHandler = async (req, res, next) => {
-
-  console.log(req.body);
-
-  const {value, error} = registerSchema.validate(req.body, {abortEarly: false});
-
-  if (error) {
-    const errorPayload = constructErrorJSON(error);
-    return res.status(400).json(errorPayload)
-  }
-
-  const user = await getUser(value.username);
+  const user = await getUser().where("username", "=", req.user?.username);
 
   if (user) {
-    return res.status(400).json({error: "User already exists."})
+    return res.status(400).json({ errors: [{ key: "username", message: "User already exists." }] });
   }
 
-  value.password = await hashPassword(value.password)
+  const hashedPassword = await hashPassword(password);
 
-  const createdUser = await createUser(value as User);
+  const createdUser = await getUser()
+    .insert({
+      username,
+      password: hashedPassword,
+      role,
+    })
+    .returning("*");
 
-  res.json({message: "Registration Successful", ...createdUser})
-
-
-}
+  const jwt = await createJWT(createdUser[0] as User);
+  res.json({
+    message: "Registration Successful",
+    user: createdUser,
+    access_token: jwt,
+  });
+};
